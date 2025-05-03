@@ -10,7 +10,8 @@ from sklearn.model_selection import cross_val_score, StratifiedKFold
 from sklearn.manifold import TSNE
 from sklearn.metrics import confusion_matrix, ConfusionMatrixDisplay
 from sklearn.preprocessing import LabelEncoder
-import umap
+# import umap
+from umap import UMAP
 import plotly.express as px
 import pandas as pd
 
@@ -116,7 +117,8 @@ if uploaded_zip is not None:
     tsne = TSNE(n_components=2, random_state=42, perplexity=30) 
     X_tsne = tsne.fit_transform(X_reduced)
 
-    reducer = umap.UMAP(n_components=2, random_state=42)
+    # reducer = umap.UMAP(n_components=2, random_state=42)
+    reducer = UMAP(n_components=2, random_state=42)
     X_umap = reducer.fit_transform(X_reduced)
 
     # Crear las visualizaciones t-SNE y UMAP
