@@ -127,7 +127,7 @@ if uploaded_zip is not None:
                           title="Visualización t-SNE", width=900, height=600)
     fig_tsne.update_traces(marker=dict(size=12))  # Ajusta el tamaño de los puntos
     st.plotly_chart(fig_tsne)
-    fig_tsne.write_html("visualizaciones/tsne.html")
+    # fig_tsne.write_html("visualizaciones/tsne.html")
 
     umap_df = pd.DataFrame(X_umap, columns=['x', 'y'])
     umap_df['author'] = labels
@@ -136,7 +136,7 @@ if uploaded_zip is not None:
                           title="Visualización UMAP", width=900, height=600)
     fig_umap.update_traces(marker=dict(size=12))  # Ajusta el tamaño de los puntos
     st.plotly_chart(fig_umap)
-    fig_umap.write_html("visualizaciones/umap.html")
+    # fig_umap.write_html("visualizaciones/umap.html")
 
 # Descargar Readme
 import base64
