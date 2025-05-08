@@ -10,11 +10,11 @@ from sklearn.model_selection import cross_val_score, StratifiedKFold
 from sklearn.manifold import TSNE
 from sklearn.metrics import confusion_matrix, ConfusionMatrixDisplay
 from sklearn.preprocessing import LabelEncoder
+from scipy.spatial.distance import cdist
 from umap import UMAP
 import plotly.express as px
 import pandas as pd
 import shutil
-import base64
 
 # --- Borrar automáticamente ./data al iniciar la app --- #
 def clear_data_folder():
@@ -84,12 +84,14 @@ st.sidebar.markdown("""
 
 Sube un archivo `data.zip` que contenga los archivos .txt directamente (sin subcarpetas).  
 Cada archivo debe comenzar con el nombre del autor, seguido de "_", por ejemplo: `Seneca_DeBeneficiis.txt`.
-
 """)
 
 st.sidebar.markdown("### Configuración de n-gramas")
 ngram_min = st.sidebar.number_input("n-grama mínimo", min_value=1, max_value=10, value=2)
 ngram_max = st.sidebar.number_input("n-grama máximo", min_value=1, max_value=10, value=4)
+
+st.sidebar.markdown("### Configuración de visualización")
+point_size = st.sidebar.number_input("Tamaño del punto en los gráficos", min_value=1, max_value=50, value=12)
 
 uploaded_zip = st.file_uploader("Sube un archivo .zip", type=["zip"])
 
@@ -117,7 +119,7 @@ if uploaded_zip is not None:
     tsne_df['filename'] = filenames
     fig_tsne = px.scatter(tsne_df, x='x', y='y', color='author', hover_data=['filename'],
                           title="Visualización t-SNE", width=900, height=600)
-    fig_tsne.update_traces(marker=dict(size=12))
+    fig_tsne.update_traces(marker=dict(size=point_size))
     st.plotly_chart(fig_tsne)
 
     # --- UMAP con ajuste dinámico de n_neighbors --- #
@@ -130,7 +132,40 @@ if uploaded_zip is not None:
     umap_df['filename'] = filenames
     fig_umap = px.scatter(umap_df, x='x', y='y', color='author', hover_data=['filename'],
                           title="Visualización UMAP", width=900, height=600)
-    fig_umap.update_traces(marker=dict(size=12))
+    fig_umap.update_traces(marker=dict(size=point_size))
     st.plotly_chart(fig_umap)
 
-# st.markdown(get_readme_download_link(), unsafe_allow_html=True)
+    # --- Tabla con distancias a centroides --- #
+    st.write("### Distancia de cada texto a los centroides de autor")
+    distances = cdist(X_reduced, clf.centroids_, metric='euclidean')
+    clf_classes = clf.classes_
+
+    # Crear la tabla con distancias
+    distance_matrix = []
+    for i, fname in enumerate(filenames):
+        row = {"Texto": fname, "Autor": labels[i]}
+        for j, author in enumerate(clf_classes):
+            row[f"Distancia_{author}"] = round(distances[i][j], 5)
+        closest_author = clf_classes[np.argmin(distances[i])]
+        row["Más cercano"] = closest_author
+        distance_matrix.append(row)
+
+    # Crear DataFrame
+    df_distances = pd.DataFrame(distance_matrix)
+
+    # Reordenar columnas: Texto, Autor, Autor más cercano, luego distancias
+    cols = ["Texto", "Autor", "Más cercano"] + [col for col in df_distances.columns if col.startswith("Distancia")]
+    df_distances = df_distances[cols]
+
+    # Estilo para resaltar en verde el mínimo de cada fila (entre distancias)
+    def highlight_min(s):
+        is_min = s == s.min()
+        return ['background-color: lightgreen' if v else '' for v in is_min]
+
+    # Extraer solo columnas de distancia
+    dist_cols = [col for col in df_distances.columns if col.startswith("Distancia")]
+    styled_df = df_distances.style.apply(highlight_min, subset=dist_cols, axis=1)
+
+    # Mostrar en Streamlit
+    st.write("### Distancia de cada texto a los centroides de autor")
+    st.dataframe(styled_df, use_container_width=True)
