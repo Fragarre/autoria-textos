@@ -6,10 +6,9 @@ import streamlit as st
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.decomposition import TruncatedSVD
 from sklearn.neighbors import NearestCentroid
-from sklearn.model_selection import cross_val_score, StratifiedKFold
+from sklearn.model_selection import train_test_split
 from sklearn.manifold import TSNE
 from sklearn.metrics import confusion_matrix, ConfusionMatrixDisplay
-from sklearn.preprocessing import LabelEncoder
 from scipy.spatial.distance import cdist
 from umap import UMAP
 import plotly.express as px
@@ -23,16 +22,23 @@ def clear_data_folder():
         shutil.rmtree(data_path)
     os.makedirs(data_path)
 
-clear_data_folder()
+def clear_test_folder():
+    data_path = './new_data/'
+    if os.path.exists(data_path):
+        shutil.rmtree(data_path)
+    os.makedirs(data_path)
 
-# --- Función para extraer el archivo ZIP --- #
-def unzip_data(zip_file):
+clear_data_folder()
+clear_test_folder()
+
+# --- Funciones para extracción de archivos ZIP --- #
+def unzip_data(zip_file, extract_to='./data/'):
     with zipfile.ZipFile(zip_file, 'r') as zip_ref:
-        zip_ref.extractall('./data/')
+        zip_ref.extractall(extract_to)
     st.success("¡Datos extraídos correctamente!. (Espera mientras el estado sea RUNNING...)")
 
-# --- Función para cargar los textos y generar el modelo --- #
-def load_and_train_model(ngram_min, ngram_max):
+# --- Cargar textos y entrenar modelo con split --- #
+def load_and_train_model_split(ngram_min, ngram_max, test_size=0.2):
     corpus_path = './data/'
     texts, labels, filenames = [], [], []
 
@@ -41,131 +47,168 @@ def load_and_train_model(ngram_min, ngram_max):
             full_path = os.path.join(corpus_path, filename)
             with open(full_path, 'r', encoding='utf-8') as f:
                 texts.append(f.read())
-
-                if "_" in filename:
-                    author = filename.split("_")[0]
-                else:
-                    author = "Desconocido"
-
+                author = filename.split("_")[0] if "_" in filename else "Desconocido"
                 labels.append(author)
-                filenames.append(filename[:-4])  # sin extensión
+                filenames.append(filename[:-4])  # sin .txt
+
+    if len(texts) < 2:
+        st.error("Se necesitan al menos 2 archivos para entrenar el modelo.")
+        return None
+
+    X_train, X_test, y_train, y_test, filenames_train, filenames_test = train_test_split(
+        texts, labels, filenames, test_size=test_size, stratify=labels, random_state=42
+    )
 
     vectorizer = TfidfVectorizer(analyzer='char', ngram_range=(ngram_min, ngram_max))
-    X = vectorizer.fit_transform(texts)
+    X_vec_train = vectorizer.fit_transform(X_train)
+    X_vec_test = vectorizer.transform(X_test)
+
     svd = TruncatedSVD(n_components=50, random_state=42)
-    X_reduced = svd.fit_transform(X)
+    X_reduced_train = svd.fit_transform(X_vec_train)
+    X_reduced_test = svd.transform(X_vec_test)
 
     clf = NearestCentroid()
-    clf.fit(X_reduced, labels)
+    clf.fit(X_reduced_train, y_train)
+    y_pred = clf.predict(X_reduced_test)
 
-    return clf, vectorizer, svd, texts, labels, filenames, X_reduced
+    return {
+        "clf": clf,
+        "vectorizer": vectorizer,
+        "svd": svd,
+        "X_train_reduced": X_reduced_train,
+        "y_train": y_train,
+        "filenames_train": filenames_train,
+        "X_test_reduced": X_reduced_test,
+        "y_test": y_test,
+        "y_pred": y_pred,
+        "filenames_test": filenames_test,
+    }
 
-# --- Identificar errores en la matriz de confusión --- #
-def identify_confusion_errors(labels, y_pred, filenames, clf):
-    errors = []
-    cm = confusion_matrix(labels, y_pred, labels=clf.classes_)
-    for i in range(len(clf.classes_)):
-        for j in range(len(clf.classes_)):
-            if i != j and cm[i, j] > 0:
-                misclassified_files = [filenames[idx] for idx, label in enumerate(labels) 
-                                       if label == clf.classes_[i] and y_pred[idx] == clf.classes_[j]]
-                errors.append({
-                    'true_label': clf.classes_[i],
-                    'predicted_label': clf.classes_[j],
-                    'misclassified_files': misclassified_files
-                })
-    return errors
+# --- Calcular distancias y probabilidades de autoría --- #
+# --- Calcular distancias y probabilidades de autoría --- #
+def calculate_authorship_probabilities(model_result, new_zip):
+    temp_path = './new_data/'
+    if os.path.exists(temp_path):
+        shutil.rmtree(temp_path)
+    os.makedirs(temp_path)
 
-# --- Interfaz de usuario en Streamlit --- #
+    unzip_data(new_zip, extract_to=temp_path)
+
+    clf = model_result['clf']
+    vectorizer = model_result['vectorizer']
+    svd = model_result['svd']
+
+    new_texts, new_filenames = [], []
+    for filename in os.listdir(temp_path):
+        if filename.endswith('.txt'):
+            with open(os.path.join(temp_path, filename), 'r', encoding='utf-8') as f:
+                new_texts.append(f.read())
+                new_filenames.append(filename[:-4])
+
+    if not new_texts:
+        st.warning("No se encontraron archivos .txt en el nuevo ZIP.")
+        return
+
+    X_new = vectorizer.transform(new_texts)
+    X_new_reduced = svd.transform(X_new)
+
+    distances = cdist(X_new_reduced, clf.centroids_, metric='euclidean')
+
+    # --- Tabla de distancias --- #
+    distance_table = pd.DataFrame(distances, columns=clf.classes_)
+    distance_table.insert(0, "Texto", new_filenames)
+
+    st.write("### Tabla de distancias a centroides")
+    st.dataframe(
+        distance_table.style.highlight_min(subset=clf.classes_, axis=1, color='lightblue'),
+        use_container_width=True
+    )
+
+    # --- Tabla de probabilidades con softmax inversa --- #
+    scaling_factor = 10  # Puedes probar con 5, 10, 20
+    inv_distances = np.exp(-scaling_factor * distances)
+    probs = inv_distances / inv_distances.sum(axis=1, keepdims=True)
+    probs_percent = probs * 100
+
+    prob_table = pd.DataFrame(probs_percent, columns=clf.classes_)
+    prob_table.insert(0, "Texto", new_filenames)
+
+    st.write("### Tabla de probabilidades de autoría (%)")
+    st.dataframe(
+        prob_table.style.format({col: "{:.1f}%" for col in clf.classes_})
+                   .highlight_max(subset=clf.classes_, axis=1, color='lightgreen'),
+        use_container_width=True
+    )
+
+    # --- Gráfica tipo "código de barras" por texto --- #
+    st.write("### Visualización de probabilidades por texto")
+    for i, text_name in enumerate(new_filenames):
+        fig = px.bar(
+            x=clf.classes_,
+            y=probs_percent[i],
+            labels={'x': 'Autor', 'y': 'Probabilidad (%)'},
+            title=f"Probabilidades de autoría para '{text_name}'",
+            text=[f"{p:.1f}%" for p in probs_percent[i]],
+        )
+        fig.update_traces(marker_color='lightblue', textposition='outside')
+        fig.update_layout(yaxis_range=[0, 100])
+        st.plotly_chart(fig, use_container_width=True)
+
+
+
+# --- Interfaz Streamlit --- #
 st.title("Análisis estilométrico. Textos latinos")
-st.write("Sube un archivo .zip con los datos de los autores para entrenar el modelo.")
+
 st.sidebar.markdown("""
 ### Instrucciones
-
-Sube un archivo `data.zip` que contenga los archivos .txt directamente (sin subcarpetas).  
-Cada archivo debe comenzar con el nombre del autor, seguido de "_", por ejemplo: `Seneca_DeBeneficiis.txt`.
+1. Sube un archivo `data.zip` con textos etiquetados para entrenar.
+2. Sube un segundo `nuevos_textos.zip` con textos a clasificar.
+3. Cada archivo debe empezar con el nombre del autor seguido de guion bajo (ej. `Seneca_DeBeneficiis.txt`).
 """)
 
 st.sidebar.markdown("### Configuración de n-gramas")
 ngram_min = st.sidebar.number_input("n-grama mínimo", min_value=1, max_value=10, value=2)
 ngram_max = st.sidebar.number_input("n-grama máximo", min_value=1, max_value=10, value=4)
 
-st.sidebar.markdown("### Configuración de visualización")
-point_size = st.sidebar.number_input("Tamaño del punto en los gráficos", min_value=1, max_value=50, value=12)
+zip_train = st.file_uploader("Sube archivo .zip de entrenamiento", type="zip")
+zip_predict = st.file_uploader("Sube archivo .zip con textos a clasificar", type="zip")
 
-uploaded_zip = st.file_uploader("Sube un archivo .zip", type=["zip"])
+if zip_train:
+    unzip_data(zip_train)
+    result = load_and_train_model_split(ngram_min, ngram_max)
 
-if uploaded_zip is not None:
-    unzip_data(uploaded_zip)
-    clf, vectorizer, svd, texts, labels, filenames, X_reduced = load_and_train_model(ngram_min, ngram_max)
+    if result:
+        clf = result['clf']
+        y_test = result['y_test']
+        y_pred = result['y_pred']
+        filenames_test = result['filenames_test']
 
-    st.write("Generando la matriz de confusión...")
-    y_pred = clf.predict(X_reduced)
-    cm = confusion_matrix(labels, y_pred, labels=clf.classes_)
-    cm_display = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=clf.classes_)
-    cm_display.plot(cmap=plt.cm.Blues)
-    st.pyplot(plt.gcf(), use_container_width=True)
+        st.write("### Evaluación del modelo")
+        accuracy = np.mean(np.array(y_test) == np.array(y_pred))
+        st.write(f"**Precisión en test:** {accuracy:.2%}")
 
-    st.write("Generando visualizaciones...")
-    n_samples = len(X_reduced)
+        cm = confusion_matrix(y_test, y_pred, labels=clf.classes_)
+        cm_display = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=clf.classes_)
+        cm_display.plot(cmap=plt.cm.Blues)
+        st.pyplot(plt.gcf(), use_container_width=True)
 
-    # --- t-SNE con ajuste dinámico de perplexity --- #
-    perplexity = min(30, max(2, n_samples // 3))
-    tsne = TSNE(n_components=2, random_state=42, perplexity=perplexity)
-    X_tsne = tsne.fit_transform(X_reduced)
+        errors = []
+        for real, pred, filename in zip(y_test, y_pred, filenames_test):
+            if real != pred:
+                errors.append({
+                    "Texto": filename,
+                    "Autor real": real,
+                    "Autor predicho": pred
+                })
 
-    tsne_df = pd.DataFrame(X_tsne, columns=['x', 'y'])
-    tsne_df['author'] = labels
-    tsne_df['filename'] = filenames
-    fig_tsne = px.scatter(tsne_df, x='x', y='y', color='author', hover_data=['filename'],
-                          title="Visualización t-SNE", width=900, height=600)
-    fig_tsne.update_traces(marker=dict(size=point_size))
-    st.plotly_chart(fig_tsne)
+        if errors:
+            st.write("### Textos mal clasificados en el conjunto de test")
+            st.dataframe(pd.DataFrame(errors), use_container_width=True)
+        else:
+            st.success("✅ Todos los textos del conjunto de test fueron clasificados correctamente.")
 
-    # --- UMAP con ajuste dinámico de n_neighbors --- #
-    n_neighbors = min(15, max(2, n_samples // 3))
-    reducer = UMAP(n_components=2, n_neighbors=n_neighbors, random_state=42)
-    X_umap = reducer.fit_transform(X_reduced)
+        if zip_predict:
+            calculate_authorship_probabilities(result, zip_predict)
 
-    umap_df = pd.DataFrame(X_umap, columns=['x', 'y'])
-    umap_df['author'] = labels
-    umap_df['filename'] = filenames
-    fig_umap = px.scatter(umap_df, x='x', y='y', color='author', hover_data=['filename'],
-                          title="Visualización UMAP", width=900, height=600)
-    fig_umap.update_traces(marker=dict(size=point_size))
-    st.plotly_chart(fig_umap)
-
-    # --- Tabla con distancias a centroides --- #
-    st.write("### Distancia de cada texto a los centroides de autor")
-    distances = cdist(X_reduced, clf.centroids_, metric='euclidean')
-    clf_classes = clf.classes_
-
-    # Crear la tabla con distancias
-    distance_matrix = []
-    for i, fname in enumerate(filenames):
-        row = {"Texto": fname, "Autor": labels[i]}
-        for j, author in enumerate(clf_classes):
-            row[f"Distancia_{author}"] = round(distances[i][j], 5)
-        closest_author = clf_classes[np.argmin(distances[i])]
-        row["Más cercano"] = closest_author
-        distance_matrix.append(row)
-
-    # Crear DataFrame
-    df_distances = pd.DataFrame(distance_matrix)
-
-    # Reordenar columnas: Texto, Autor, Autor más cercano, luego distancias
-    cols = ["Texto", "Autor", "Más cercano"] + [col for col in df_distances.columns if col.startswith("Distancia")]
-    df_distances = df_distances[cols]
-
-    # Estilo para resaltar en verde el mínimo de cada fila (entre distancias)
-    def highlight_min(s):
-        is_min = s == s.min()
-        return ['background-color: lightgreen' if v else '' for v in is_min]
-
-    # Extraer solo columnas de distancia
-    dist_cols = [col for col in df_distances.columns if col.startswith("Distancia")]
-    styled_df = df_distances.style.apply(highlight_min, subset=dist_cols, axis=1)
-
-    # Mostrar en Streamlit
-    st.write("### Distancia de cada texto a los centroides de autor")
-    st.dataframe(styled_df, use_container_width=True)
+    else:
+        st.warning("No se pudo entrenar el modelo. Verifica los archivos.")

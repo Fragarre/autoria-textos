@@ -1,52 +1,41 @@
-# Clasificación y Visualización de Textos en Prosa Latina
-Este código es una adptación a un front-end streamlit del proyecto base.
+# Análisis estilométrico automatizado de textos latinos
 
-## Referencias y créditos
+Este proyecto proporciona una interfaz interactiva basada en Streamlit para realizar análisis estilométrico de textos latinos. Su principal objetivo es facilitar la atribución de autoría mediante técnicas de aprendizaje automático, con un enfoque en la comparación de patrones estilísticos a partir de n-gramas de caracteres.
 
-Este proyecto se inspira en el trabajo de Benjamin Nagy sobre estilometría aplicada a textos latinos. Agradezco especialmente su artículo:
+## Estructura esperada de datos
 
-> Nagy, Benjamin. *Some stylometric remarks on Ovid’s Heroides and the Epistula Sapphus*. Digital Scholarship in the Humanities, 2023. [https://doi.org/10.1093/llc/fqac098](https://doi.org/10.1093/llc/fqac098)
+El sistema trabaja con archivos `.zip` que contienen textos en formato `.txt`. Cada archivo debe estar nombrado comenzando por el nombre del autor, seguido de un guion bajo y el título del texto. Ejemplo:
 
-El repositorio asociado al artículo original está licenciado bajo **CC-BY 4.0**, lo que permite su reutilización con atribución adecuada. Parte del enfoque metodológico y elementos del código fueron adaptados de dicho trabajo con respeto a esta licencia. (https://github.com/bnagy/heroides-paper)
+```
+Tacito_Anales16.txt
+Caesar_BelloCivili.txt
+```
 
+Se requieren dos conjuntos de datos:
 
-## Explicación de las capacidades y funcionamiento del programa
+* Un conjunto de **entrenamiento**, que contiene textos con autor conocido.
+* Un conjunto de **clasificación**, con textos cuya autoría se desea predecir.
 
-Este programa está diseñado para realizar un análisis estilométrico de textos.
+## Proceso de análisis
 
-## 1. Vectorización de textos con TF-IDF:
+1. **Carga y preparación de datos:** Los textos se cargan desde el archivo ZIP y se extraen en carpetas temporales.
 
-Los textos se convierten en vectores numéricos utilizando el modelo de **TF-IDF** (*Term Frequency–Inverse Document Frequency*), que pondera la frecuencia de aparición de fragmentos (o *tokens*) dentro de cada documento, considerando su rareza en el conjunto global.
+2. **Extracción de características estilísticas:** Se utiliza `TfidfVectorizer` con `analyzer='char'` para representar los textos mediante n-gramas de caracteres. El usuario puede seleccionar el rango de `n` mediante la barra lateral de configuración.
 
-- Se utiliza un `TfidfVectorizer` de `scikit-learn` con `analyzer='char'`, lo que significa que los textos se analizan como secuencias de **caracteres**, no de palabras.
-- Se aplican **n-grams de caracteres**, que son cadenas consecutivas de `n` letras. Por ejemplo, el 3-gram de la palabra `"texto"` generaría: `"tex"`, `"ext"`, `"xto"`.
-- El rango de n-gramas (`ngram_min`, `ngram_max`) es configurable desde la interfaz. Por defecto, se usa de 2 a 4, es decir, 2-gramas, 3-gramas y 4-gramas.
+3. **Reducción de dimensionalidad:** Se aplica `TruncatedSVD` para reducir la dimensionalidad del espacio vectorial a 50 componentes, permitiendo un procesamiento más eficiente sin pérdida significativa de información.
 
-## 2. Reducción de dimensión: TruncatedSVD
-Como el espacio generado por los n-grams puede tener decenas de miles de dimensiones, se aplica Truncated Singular Value Decomposition (TruncatedSVD), también conocido como LSA (Latent Semantic Analysis).
+4. **División del conjunto de entrenamiento:** El 80% de los textos etiquetados se utilizan para entrenar el modelo, y el 20% restante se reserva para pruebas. La partición se estratifica para preservar la proporción de autores.
 
-Esto reduce la complejidad del modelo sin perder las características más relevantes del estilo de escritura.
+5. **Modelado:** Se entrena un clasificador `NearestCentroid`, que asigna nuevos textos al autor cuyo centroide estilístico se encuentre más próximo en el espacio reducido.
 
-## 3. Clasificación: Nearest Centroid
-El clasificador entrenado es un modelo simple y eficiente: Nearest Centroid, que calcula el centroide (punto medio) de cada clase y predice la clase del nuevo texto según el centroide más cercano.
+6. **Evaluación del modelo:** Se muestra la matriz de confusión y el porcentaje de acierto sobre el conjunto de test.
 
-## 4.Matriz de confusión:
+7. **Clasificación de nuevos textos:** Al cargar un segundo archivo ZIP, el sistema calcula las distancias de los textos nuevos a los centroides de autor y estima probabilidades de autoría mediante una softmax inversa.
 
-Tras entrenar el modelo, el programa calcula una matriz de confusión, que compara las predicciones del clasificador con las etiquetas reales de los textos. Esta matriz muestra cuántos textos fueron correctamente clasificados y cuántos fueron mal clasificados, lo que permite identificar patrones de errores y mejorar el modelo.
+## Resultados y visualizaciones
 
-## 5.Visualizaciones: t-SNE y UMAP:
+* **Matriz de confusión** con los resultados del conjunto de test.
+* **Tabla de distancias** de los nuevos textos a los centroides de autor.
+* **Tabla de probabilidades de autoría**, expresadas en porcentaje.
+* **Gráficos de barras** para cada texto, representando la distribución de probabilidades por autor.
 
-El programa incluye dos métodos de reducción de dimensionalidad para crear representaciones visuales de los datos: t-SNE y UMAP. Estas técnicas permiten proyectar los datos de alta dimensión (vectores de texto) en un espacio bidimensional, lo que facilita la visualización de cómo se agrupan los textos en función de su autoría. Estas visualizaciones ayudan a comprender cómo el clasificador agrupa los textos y cómo se distribuyen los diferentes autores en el espacio de características.
-
-# ¿Qué es el clasificador Nearest Centroid?
-
-**Nearest Centroid** es un algoritmo de clasificación supervisado, simple y eficiente, especialmente útil cuando las clases tienen una distribución bien separada en el espacio vectorial. Este modelo se basa en calcular el centro (o promedio) de los vectores de cada clase, y luego asigna nuevas muestras a la clase cuyo centroide esté más cercano.
-
-##  ¿Cómo funciona?
-
-Para cada clase (por ejemplo, un autor), el algoritmo calcula el **centroide**, que es el promedio de todos los vectores que pertenecen a esa clase: μ_c = (1 / N_c) * Σ x_i.
-
-donde:
-- `μ_c` es el centroide de la clase `c`.
-- `N_c` es el número de textos de esa clase.
-- `x_i` son los vectores TF-IDF reducidos mediante SVD correspondientes a los textos.
