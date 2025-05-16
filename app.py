@@ -157,7 +157,7 @@ def calculate_authorship_probabilities(model_result, new_zip):
 
 
 # --- Interfaz Streamlit --- #
-st.title("Análisis estilométrico. Textos latinos")
+st.title("Análisis de autoría. Textos latinos")
 
 st.sidebar.markdown("""
 ### Instrucciones
